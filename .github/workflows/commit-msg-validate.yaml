@@ -1,0 +1,102 @@
+name: Commit Message Validate
+
+on: 
+  push:
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  commit_msg_validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Commit Message Validate
+        shell: bash
+        run: |
+          #!/bin/bash
+          echo "Checking commits..."
+          valid_types=(
+            "feat"
+            "fix"
+            "close"
+            "resolve"
+            "docs"
+            "chore"
+            "revert"
+            "build"
+            "refactor"
+            "test"
+          )
+          commit_msg_regex='^([[:alnum:]_]+)(\([[:alnum:]_]+\))?!?: .{1,50}$'
+          commit_msg_dict='{"type": "\1", "scope": "\2"}'
+          commit_msg_dict_no_scope='{"type": "\1", "scope": "None"}'
+          
+          function print_failed() {
+            echo -e '\033[31mERROR\033[0m: Commit message does not follow the conventional commit format.'
+            echo 'Format: `<type>(<scope>)[!]: <description>{{1,50}}`'
+            echo 'Example: `feat(auth)!: add login functionality`'
+          }
+          
+          function print_failed_additional() {
+            print_failed
+            echo "Valid Tags: \`${valid_types[@]}\`"
+            if [[ ! -z "$3" ]]; then
+              msg="$(echo "$1" | sed -r -n "s#${commit_msg_regex}#${commit_msg_dict}#p")"
+            else
+              msg="$(echo "$1" | sed -r -n "s#${commit_msg_regex}#${commit_msg_dict_no_scope}#p")"
+            fi
+            echo "Tags: \`$msg\`"
+          }
+          
+          function is_valid_type_commit() {
+            for valid_type in "${valid_types[@]}"; do
+              if [[ "$1" == "$valid_type" ]]; then
+                return 0
+              fi
+            done
+            return 1
+          }
+
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            BASE_COMMIT=${{ github.event.before }}
+            HEAD_COMMIT=${{ github.event.after }}
+          else
+            BASE_COMMIT=${{ github.event.pull_request.base.sha }}
+            HEAD_COMMIT=${{ github.event.pull_request.head.sha }}
+          fi
+          if [[ -z "$BASE_COMMIT" ]]; then
+            exit 0
+          fi
+
+          # Check if this is the first push to a new branch (before will be all zeros)
+          if [[ "$BASE_COMMIT" == "0000000000000000000000000000000000000000" ]]; then
+            # If new branch, just check the latest commit or a fixed range
+            commits=$(git rev-parse HEAD)
+          else
+            # Use ${} for variables and ensure the range exists
+            commits=$(git log --format=%H "${BASE_COMMIT}..${HEAD_COMMIT}")
+          fi
+          
+          for commit in $commits; do
+            commit_msg="$(git rev-list --format=%s --max-count=1 ${commit} | tail -n 1)"
+            echo "Validating: \`$commit_msg\`"
+            if [[ -z "$(echo -e "$commit_msg" | grep -oE "${commit_msg_regex}")" ]]; then
+              print_failed
+              echo "Commit: \`${commit_msg}\`"
+              exit 1
+            else
+              commit_type="$(echo -e "${commit_msg}" | sed -r -n "s#${commit_msg_regex}#\1#p")"
+              commit_scope="$(echo -e "${commit_msg}" | sed -r -n "s#${commit_msg_regex}#\2#p")"
+          
+              if ! is_valid_type_commit "$commit_type"; then
+                print_failed_additional "$commit_msg" "$commit_type" "$commit_scope"
+                exit 1
+              fi
+            fi
+          done
+      
+          echo "All commit messages are valid."
+          exit 0
